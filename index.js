@@ -31,8 +31,10 @@ const processTransfer = async (jobId, url, folderId) => {
 
 const ytdlp = spawn('yt-dlp', [
   '--newline',
-  '--cookies', 'cookies.txt.txt', // הוספת השורה הזו
+  '--cookies', 'cookies.txt',
+  '--js-runtime', 'deno', // הוספת השורה הזו כדי להשתמש ב-Deno
   '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+  '--no-check-certificate', // עוזר לעקוף בעיות אישור בשרתים מסוימים
   '-o', '-', 
   url
 ]);
