@@ -28,12 +28,14 @@ const processTransfer = async (jobId, url, folderId) => {
   job.status = 'processing';
 
   return new Promise((resolve, reject) => {
-    const ytdlp = spawn('yt-dlp', [
-      '--newline',
-      '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-      '-o', '-', 
-      url
-    ]);
+
+const ytdlp = spawn('yt-dlp', [
+  '--newline',
+  '--cookies', 'cookies.txt', // הוספת השורה הזו
+  '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+  '-o', '-', 
+  url
+]);
 
     // שימוש ב-drive שהגדרנו למעלה
     drive.files.create({
