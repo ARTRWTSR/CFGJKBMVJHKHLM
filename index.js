@@ -31,7 +31,7 @@ const processTransfer = async (jobId, url, folderId) => {
 
 const ytdlp = spawn('yt-dlp', [
   '--newline',
-  '--cookies', 'cookies.txt', // הוספת השורה הזו
+  '--cookies', 'cookies.txt.txt', // הוספת השורה הזו
   '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
   '-o', '-', 
   url
