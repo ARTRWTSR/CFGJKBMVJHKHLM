@@ -12,12 +12,16 @@ app.use(express.json());
 const queue = new PQueue({ concurrency: 1 });
 const jobs = new Map();
 
+// 1. הגדרת החיבור (המפתח)
 const auth = new google.auth.JWT(
   process.env.GOOGLE_CLIENT_EMAIL,
   null,
   process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
   ['https://www.googleapis.com/auth/drive.file']
 );
+
+// 2. הגדרת ה"דרייב" - השורה הזו הייתה חסרה או במקום לא נכון!
+const drive = google.drive({ version: 'v3', auth });
 
 const processTransfer = async (jobId, url, folderId) => {
   const job = jobs.get(jobId);
@@ -27,39 +31,35 @@ const processTransfer = async (jobId, url, folderId) => {
     const ytdlp = spawn('yt-dlp', [
       '--newline',
       '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-      '--merge-output-format', 'mp4',
-      '--max-filesize', '250M',
       '-o', '-', 
       url
     ]);
 
-    const timeout = setTimeout(() => { ytdlp.kill('SIGKILL'); reject(new Error('Timeout')); }, 600000);
-
-    ytdlp.stdout.on('data', (chunk) => {
-      const match = chunk.toString().match(/(\d+\.\d+)%/);
-      if (match) job.progress = parseFloat(match[1]);
-    });
-
+    // שימוש ב-drive שהגדרנו למעלה
     drive.files.create({
-      requestBody: { name: `Cloud_${jobId}.mp4`, parents: [folderId] },
+      requestBody: { name: `video_${jobId}.mp4`, parents: [folderId] },
       media: { mimeType: 'video/mp4', body: ytdlp.stdout },
+    }, {
+      onUploadProgress: (evt) => {
+        job.progress = Math.round((evt.bytesRead / 1024 / 1024) * 100) / 100;
+      }
     }).then(() => {
-      clearTimeout(timeout);
       job.status = 'completed';
       job.progress = 100;
       resolve();
     }).catch(err => {
-      clearTimeout(timeout);
       ytdlp.kill('SIGKILL');
       reject(err);
     });
+
+    ytdlp.stderr.on('data', (data) => console.log(`דיווח: ${data}`));
   });
 };
 
 app.post('/upload', (req, res) => {
   const { url, folderId } = req.body;
   const jobId = uuidv4();
-  jobs.set(jobId, { status: 'queued', progress: 0, timestamp: Date.now() });
+  jobs.set(jobId, { status: 'queued', progress: 0 });
   queue.add(() => processTransfer(jobId, url, folderId).catch(err => {
     const j = jobs.get(jobId);
     if (j) { j.status = 'failed'; j.error = err.message; }
@@ -73,4 +73,4 @@ app.get('/status/:jobId', (req, res) => {
   res.json(job);
 });
 
-app.listen(3000, () => console.log('🚀 Server Running'));
+app.listen(3000, () => console.log('🚀 המנוע פועל על פורט 3000'));
