@@ -1,46 +1,74 @@
+const express = require('express');
 const { spawn } = require('child_process');
 const { google } = require('googleapis');
 const { PassThrough } = require('stream');
 
-async function downloadAndUpload(videoUrl, folderId) {
-    console.log(`🚀 מתחיל תהליך עבור: ${videoUrl}`);
+const app = express();
+const port = process.env.PORT || 3000; // הפורט ש-Render דורש
 
-    // 1. הגדרת הצינור (PassThrough Stream)
+// === הגדרות ===
+const FOLDER_ID = '1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5'; // התיקייה שלך בדרייב
+// ===============
+
+app.use(express.json());
+
+// דף בית פשוט כדי ש-Render יראה שהשרת חי
+app.get('/', (req, res) => {
+    res.send('המנוע פועל וממתין לפקודות...');
+});
+
+// נקודת הקצה שמקבלת את הקישור ומתחילה את התהליך
+app.get('/download', async (req, res) => {
+    const videoUrl = req.query.url;
+    
+    if (!videoUrl) {
+        return res.status(400).send('חובה לספק קישור (url)');
+    }
+
+    // שולחים תשובה מיידית לאתר שהתהליך התחיל, כדי שהבקשה לא תיתקע
+    res.send(`התחיל תהליך הורדה והעלאה עבור: ${videoUrl}`);
+    
+    // מפעילים את הפונקציה ברקע
+    try {
+        await processVideo(videoUrl);
+    } catch (error) {
+        console.error("התהליך נכשל:", error);
+    }
+});
+
+// הפונקציה המרכזית (הורדה + הזרמה לדרייב)
+async function processVideo(videoUrl) {
+    console.log(`🚀 מתחיל עיבוד עבור: ${videoUrl}`);
+
     const bridgeStream = new PassThrough();
 
-    // 2. הפעלת yt-dlp כמנוע הזרמה
-    // שימוש בפורמט mpegts מאפשר הזרמה חיה יציבה לתוך הצינור
     const ytdlp = spawn('yt-dlp', [
         '-f', 'bestvideo+bestaudio/best',
         '--merge-output-format', 'mp4',
-        '--cookies', '/etc/secrets/cookies.txt', // נתיב הסודות ב-Render
-        '-o', '-', // פלט ל-Standard Output (הצינור)
+        '--cookies', '/etc/secrets/cookies.txt', 
+        '-o', '-', 
         videoUrl
     ]);
 
-    // חיבור הפלט של yt-dlp לצינור שלנו
     ytdlp.stdout.pipe(bridgeStream);
 
-    // לוגים לניטור התקדמות המנוע
     ytdlp.stderr.on('data', (data) => {
-        console.log(`דיווח מנוע: ${data.toString().trim()}`);
+        console.log(`דיווח: ${data.toString().trim()}`);
     });
 
     try {
-        // 3. הגדרת חיבור ל-Google Drive
         const auth = new google.auth.GoogleAuth({
-            keyFile: './service-account.json', // ודא שהקובץ קיים בתיקיית השורש
+            keyFile: './service-account.json', 
             scopes: ['https://www.googleapis.com/auth/drive.file'],
         });
         const drive = google.drive({ version: 'v3', auth });
 
-        console.log("☁️ מתחיל העלאה ל-Google Drive...");
+        console.log("☁️ הזרמה החלה. שולח נתונים ל-Google Drive...");
 
-        // 4. ביצוע ההעלאה בפועל
         const response = await drive.files.create({
             requestBody: {
                 name: `video_${Date.now()}.mp4`,
-                parents: ['1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5'], // הכנסת את ה-ID כאן
+                parents: [FOLDER_ID], 
             },
             media: {
                 mimeType: 'video/mp4',
@@ -49,14 +77,14 @@ async function downloadAndUpload(videoUrl, folderId) {
             fields: 'id, name',
         });
 
-        console.log(`✅ הצלחה! הקובץ הועלה. ID: ${response.data.id}`);
-        return response.data;
+        console.log(`✅ הצלחה! הקובץ הועלה לדרייב. ID: ${response.data.id}`);
 
     } catch (error) {
-        console.error("❌ שגיאה בתהליך ההעלאה:", error.message);
-        if (error.response) {
-            console.error("פרטי שגיאה מגוגל:", error.response.data);
-        }
-        throw error;
+        console.error("❌ שגיאת העלאה מול גוגל:", error.message);
     }
 }
+
+// הפעלת השרת
+app.listen(port, () => {
+    console.log(`🚀 השרת פועל ומאזין על פורט ${port}`);
+});
