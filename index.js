@@ -4,6 +4,8 @@ import { google } from 'googleapis';
 import PQueue from 'p-queue';
 import { v4 as uuidv4 } from 'uuid';
 import cors from 'cors';
+import fs from 'fs';
+import { PassThrough } from 'stream';
 
 const app = express();
 app.use(cors());
@@ -12,47 +14,55 @@ app.use(express.json());
 const queue = new PQueue({ concurrency: 1 });
 const jobs = new Map();
 
-// 1. הגדרת החיבור (המפתח)
+// הגדרת אימות גוגל
 const auth = new google.auth.JWT(
   process.env.GOOGLE_CLIENT_EMAIL,
   null,
   process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
   ['https://www.googleapis.com/auth/drive.file']
 );
-
-// 2. הגדרת ה"דרייב" - השורה הזו הייתה חסרה או במקום לא נכון!
 const drive = google.drive({ version: 'v3', auth });
 
 const processTransfer = async (jobId, url, folderId) => {
   const job = jobs.get(jobId);
   job.status = 'processing';
 
+  // יצירת קובץ עוגיות זמני ממשתנה הסביבה
+  const cookiePath = `/tmp/cookies_${jobId}.txt`;
+  fs.writeFileSync(cookiePath, process.env.YT_COOKIES || '');
+
   return new Promise((resolve, reject) => {
+    // הפעלת yt-dlp במצב הזרמה (stdout)
+    const ytdlp = spawn('yt-dlp', [
+      '--newline',
+      '--cookies', cookiePath,
+      '--js-runtime', 'deno',
+      '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      '-o', '-', 
+      url
+    ]);
 
-const ytdlp = spawn('yt-dlp', [
-  '--newline',
-  '--cookies', 'cookies.txt',
-  '--js-runtime', 'deno', // הוספת השורה הזו כדי להשתמש ב-Deno
-  '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-  '--no-check-certificate', // עוזר לעקוף בעיות אישור בשרתים מסוימים
-  '-o', '-', 
-  url
-]);
+    const stream = new PassThrough();
+    ytdlp.stdout.pipe(stream);
 
-    // שימוש ב-drive שהגדרנו למעלה
+    // העלאה ישירה לגוגל דרייב
     drive.files.create({
-      requestBody: { name: `video_${jobId}.mp4`, parents: [folderId] },
-      media: { mimeType: 'video/mp4', body: ytdlp.stdout },
+      requestBody: { name: `video_${Date.now()}.mp4`, parents: [folderId] },
+      media: { mimeType: 'video/mp4', body: stream },
     }, {
+      uploadType: 'resumable',
+      chunkSize: 1024 * 1024 * 5, // 5MB chunks ליציבות
       onUploadProgress: (evt) => {
         job.progress = Math.round((evt.bytesRead / 1024 / 1024) * 100) / 100;
       }
     }).then(() => {
       job.status = 'completed';
       job.progress = 100;
+      fs.unlinkSync(cookiePath); // מחיקת עוגיות בסיום
       resolve();
     }).catch(err => {
       ytdlp.kill('SIGKILL');
+      if (fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
       reject(err);
     });
 
@@ -77,4 +87,4 @@ app.get('/status/:jobId', (req, res) => {
   res.json(job);
 });
 
-app.listen(3000, () => console.log('🚀 המנוע פועל על פורט 3000'));
+app.listen(3000, () => console.log('🚀 המנוע פועל בשיטת הזרמה על פורט 3000'));
