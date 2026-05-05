@@ -40,7 +40,7 @@ async function downloadAndUpload(videoUrl, folderId) {
         const response = await drive.files.create({
             requestBody: {
                 name: `video_${Date.now()}.mp4`,
-                parents: [folderId], // ה-ID של התיקייה ששיתפת עם ה-Service Account
+                parents: ['1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5'], // הכנסת את ה-ID כאן
             },
             media: {
                 mimeType: 'video/mp4',
