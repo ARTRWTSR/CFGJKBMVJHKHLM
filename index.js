@@ -1,90 +1,62 @@
-import express from 'express';
-import { spawn } from 'child_process';
-import { google } from 'googleapis';
-import PQueue from 'p-queue';
-import { v4 as uuidv4 } from 'uuid';
-import cors from 'cors';
-import fs from 'fs';
-import { PassThrough } from 'stream';
+const { spawn } = require('child_process');
+const { google } = require('googleapis');
+const { PassThrough } = require('stream');
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+async function downloadAndUpload(videoUrl, folderId) {
+    console.log(`🚀 מתחיל תהליך עבור: ${videoUrl}`);
 
-const queue = new PQueue({ concurrency: 1 });
-const jobs = new Map();
+    // 1. הגדרת הצינור (PassThrough Stream)
+    const bridgeStream = new PassThrough();
 
-// הגדרת אימות גוגל
-const auth = new google.auth.JWT(
-  process.env.GOOGLE_CLIENT_EMAIL,
-  null,
-  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  ['https://www.googleapis.com/auth/drive.file']
-);
-const drive = google.drive({ version: 'v3', auth });
-
-const processTransfer = async (jobId, url, folderId) => {
-  const job = jobs.get(jobId);
-  job.status = 'processing';
-
-  // יצירת קובץ עוגיות זמני ממשתנה הסביבה
-  const cookiePath = `/tmp/cookies_${jobId}.txt`;
-  fs.writeFileSync(cookiePath, process.env.YT_COOKIES || '');
-
-  return new Promise((resolve, reject) => {
-    // הפעלת yt-dlp במצב הזרמה (stdout)
+    // 2. הפעלת yt-dlp כמנוע הזרמה
+    // שימוש בפורמט mpegts מאפשר הזרמה חיה יציבה לתוך הצינור
     const ytdlp = spawn('yt-dlp', [
-      '--newline',
-      '--cookies', cookiePath,
-      '--js-runtime', 'deno',
-      '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-      '-o', '-', 
-      url
+        '-f', 'bestvideo+bestaudio/best',
+        '--merge-output-format', 'mp4',
+        '--cookies', '/etc/secrets/cookies.txt', // נתיב הסודות ב-Render
+        '-o', '-', // פלט ל-Standard Output (הצינור)
+        videoUrl
     ]);
 
-    const stream = new PassThrough();
-    ytdlp.stdout.pipe(stream);
+    // חיבור הפלט של yt-dlp לצינור שלנו
+    ytdlp.stdout.pipe(bridgeStream);
 
-    // העלאה ישירה לגוגל דרייב
-    drive.files.create({
-      requestBody: { name: `video_${Date.now()}.mp4`, parents: [folderId] },
-      media: { mimeType: 'video/mp4', body: stream },
-    }, {
-      uploadType: 'resumable',
-      chunkSize: 1024 * 1024 * 5, // 5MB chunks ליציבות
-      onUploadProgress: (evt) => {
-        job.progress = Math.round((evt.bytesRead / 1024 / 1024) * 100) / 100;
-      }
-    }).then(() => {
-      job.status = 'completed';
-      job.progress = 100;
-      fs.unlinkSync(cookiePath); // מחיקת עוגיות בסיום
-      resolve();
-    }).catch(err => {
-      ytdlp.kill('SIGKILL');
-      if (fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
-      reject(err);
+    // לוגים לניטור התקדמות המנוע
+    ytdlp.stderr.on('data', (data) => {
+        console.log(`דיווח מנוע: ${data.toString().trim()}`);
     });
 
-    ytdlp.stderr.on('data', (data) => console.log(`דיווח: ${data}`));
-  });
-};
+    try {
+        // 3. הגדרת חיבור ל-Google Drive
+        const auth = new google.auth.GoogleAuth({
+            keyFile: './service-account.json', // ודא שהקובץ קיים בתיקיית השורש
+            scopes: ['https://www.googleapis.com/auth/drive.file'],
+        });
+        const drive = google.drive({ version: 'v3', auth });
 
-app.post('/upload', (req, res) => {
-  const { url, folderId } = req.body;
-  const jobId = uuidv4();
-  jobs.set(jobId, { status: 'queued', progress: 0 });
-  queue.add(() => processTransfer(jobId, url, folderId).catch(err => {
-    const j = jobs.get(jobId);
-    if (j) { j.status = 'failed'; j.error = err.message; }
-  }));
-  res.status(202).json({ jobId });
-});
+        console.log("☁️ מתחיל העלאה ל-Google Drive...");
 
-app.get('/status/:jobId', (req, res) => {
-  const job = jobs.get(req.params.jobId);
-  if (!job) return res.status(404).json({ error: "Not found" });
-  res.json(job);
-});
+        // 4. ביצוע ההעלאה בפועל
+        const response = await drive.files.create({
+            requestBody: {
+                name: `video_${Date.now()}.mp4`,
+                parents: [folderId], // ה-ID של התיקייה ששיתפת עם ה-Service Account
+            },
+            media: {
+                mimeType: 'video/mp4',
+                body: bridgeStream,
+            },
+            fields: 'id, name',
+        });
 
-app.listen(3000, () => console.log('🚀 המנוע פועל בשיטת הזרמה על פורט 3000'));
+        console.log(`✅ הצלחה! הקובץ הועלה. ID: ${response.data.id}`);
+        return response.data;
+
+    } catch (error) {
+        console.error("❌ שגיאה בתהליך ההעלאה:", error.message);
+        if (error.response) {
+            console.error("פרטי שגיאה מגוגל:", error.response.data);
+        }
+        throw error;
+    }
+}
