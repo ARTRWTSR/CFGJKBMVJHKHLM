@@ -1,44 +1,41 @@
-const express = require('express');
-const { spawn } = require('child_process');
-const { google } = require('googleapis');
-const { PassThrough } = require('stream');
+import express from 'express';
+import { spawn } from 'child_process';
+import { google } from 'googleapis';
+import { PassThrough } from 'stream';
+import cors from 'cors';
 
 const app = express();
-const port = process.env.PORT || 3000; // הפורט ש-Render דורש
+const port = process.env.PORT || 3000;
 
 // === הגדרות ===
-const FOLDER_ID = '1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5'; // התיקייה שלך בדרייב
+const FOLDER_ID = '1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5';
 // ===============
 
+app.use(cors()); // מאפשר לאתר שלך לשלוח בקשות לשרת הזה
 app.use(express.json());
 
-// דף בית פשוט כדי ש-Render יראה שהשרת חי
 app.get('/', (req, res) => {
-    res.send('המנוע פועל וממתין לפקודות...');
+    res.send('המערכת מוכנה לעבודה.');
 });
 
-// נקודת הקצה שמקבלת את הקישור ומתחילה את התהליך
 app.get('/download', async (req, res) => {
     const videoUrl = req.query.url;
     
     if (!videoUrl) {
-        return res.status(400).send('חובה לספק קישור (url)');
+        return res.status(400).send('חסר קישור.');
     }
 
-    // שולחים תשובה מיידית לאתר שהתהליך התחיל, כדי שהבקשה לא תיתקע
-    res.send(`התחיל תהליך הורדה והעלאה עבור: ${videoUrl}`);
+    res.send(`התהליך החל עבור: ${videoUrl}`);
     
-    // מפעילים את הפונקציה ברקע
     try {
         await processVideo(videoUrl);
     } catch (error) {
-        console.error("התהליך נכשל:", error);
+        console.error("שגיאה בעיבוד:", error);
     }
 });
 
-// הפונקציה המרכזית (הורדה + הזרמה לדרייב)
 async function processVideo(videoUrl) {
-    console.log(`🚀 מתחיל עיבוד עבור: ${videoUrl}`);
+    console.log(`מפעיל עיבוד עבור: ${videoUrl}`);
 
     const bridgeStream = new PassThrough();
 
@@ -53,7 +50,7 @@ async function processVideo(videoUrl) {
     ytdlp.stdout.pipe(bridgeStream);
 
     ytdlp.stderr.on('data', (data) => {
-        console.log(`דיווח: ${data.toString().trim()}`);
+        console.log(`דיווח מנוע: ${data.toString()}`);
     });
 
     try {
@@ -63,11 +60,11 @@ async function processVideo(videoUrl) {
         });
         const drive = google.drive({ version: 'v3', auth });
 
-        console.log("☁️ הזרמה החלה. שולח נתונים ל-Google Drive...");
+        console.log("מתחיל הזרמה לדרייב...");
 
         const response = await drive.files.create({
             requestBody: {
-                name: `video_${Date.now()}.mp4`,
+                name: `file_${Date.now()}.mp4`,
                 parents: [FOLDER_ID], 
             },
             media: {
@@ -77,14 +74,13 @@ async function processVideo(videoUrl) {
             fields: 'id, name',
         });
 
-        console.log(`✅ הצלחה! הקובץ הועלה לדרייב. ID: ${response.data.id}`);
+        console.log(`✅ הושלם. ID: ${response.data.id}`);
 
     } catch (error) {
-        console.error("❌ שגיאת העלאה מול גוגל:", error.message);
+        console.error("❌ שגיאת API:", error.message);
     }
 }
 
-// הפעלת השרת
 app.listen(port, () => {
-    console.log(`🚀 השרת פועל ומאזין על פורט ${port}`);
+    console.log(`השרת מאזין בפורט ${port}`);
 });
