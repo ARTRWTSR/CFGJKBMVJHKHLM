@@ -7,36 +7,41 @@ import cors from 'cors';
 const app = express();
 const port = process.env.PORT || 3000;
 
-// === הגדרות ===
-const FOLDER_ID = '1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5';
-// ===============
+// הגדרת CORS בצורה רחבה כדי לאפשר לאתר שלך ב-lovable לגשת לשרת
+app.use(cors({
+    origin: '*', // מאפשר גישה מכל מקור, פותר את שגיאת ה-CORS שראית
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+}));
 
-app.use(cors()); // מאפשר לאתר שלך לשלוח בקשות לשרת הזה
 app.use(express.json());
 
+const FOLDER_ID = '1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5';
+
 app.get('/', (req, res) => {
-    res.send('המערכת מוכנה לעבודה.');
+    res.send('Server is running');
 });
 
-app.get('/download', async (req, res) => {
+// שיניתי את הנתיב ל-/upload כדי שיתאים למה שהאתר שלך מחפש בלוגים
+app.get('/upload', async (req, res) => {
     const videoUrl = req.query.url;
     
     if (!videoUrl) {
-        return res.status(400).send('חסר קישור.');
+        return res.status(400).send('Missing video URL');
     }
 
-    res.send(`התהליך החל עבור: ${videoUrl}`);
+    // שליחת אישור מיידי לדפדפן כדי למנוע Timeout
+    res.json({ message: 'Process started', url: videoUrl });
     
     try {
         await processVideo(videoUrl);
     } catch (error) {
-        console.error("שגיאה בעיבוד:", error);
+        console.error("Error in process:", error);
     }
 });
 
 async function processVideo(videoUrl) {
-    console.log(`מפעיל עיבוד עבור: ${videoUrl}`);
-
+    console.log(`Starting processing for: ${videoUrl}`);
     const bridgeStream = new PassThrough();
 
     const ytdlp = spawn('yt-dlp', [
@@ -49,10 +54,6 @@ async function processVideo(videoUrl) {
 
     ytdlp.stdout.pipe(bridgeStream);
 
-    ytdlp.stderr.on('data', (data) => {
-        console.log(`דיווח מנוע: ${data.toString()}`);
-    });
-
     try {
         const auth = new google.auth.GoogleAuth({
             keyFile: './service-account.json', 
@@ -60,27 +61,24 @@ async function processVideo(videoUrl) {
         });
         const drive = google.drive({ version: 'v3', auth });
 
-        console.log("מתחיל הזרמה לדרייב...");
-
-        const response = await drive.files.create({
+        await drive.files.create({
             requestBody: {
-                name: `file_${Date.now()}.mp4`,
+                name: `video_${Date.now()}.mp4`,
                 parents: [FOLDER_ID], 
             },
             media: {
                 mimeType: 'video/mp4',
                 body: bridgeStream,
             },
-            fields: 'id, name',
+            fields: 'id',
         });
 
-        console.log(`✅ הושלם. ID: ${response.data.id}`);
-
+        console.log(`✅ Upload finished successfully.`);
     } catch (error) {
-        console.error("❌ שגיאת API:", error.message);
+        console.error("❌ Drive API Error:", error.message);
     }
 }
 
 app.listen(port, () => {
-    console.log(`השרת מאזין בפורט ${port}`);
+    console.log(`Server listening on port ${port}`);
 });
