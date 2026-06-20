@@ -7,43 +7,48 @@ import cors from 'cors';
 const app = express();
 const port = process.env.PORT || 3000;
 
-// הגדרת CORS בצורה רחבה כדי לאפשר לאתר שלך ב-lovable לגשת לשרת
+// מאפשר לאתר ב-lovable לבצע את הפנייה ללא חסימות CORS
 app.use(cors({
-    origin: '*', // מאפשר גישה מכל מקור, פותר את שגיאת ה-CORS שראית
+    origin: '*',
     methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
+// ה-ID של התיקייה שלך ב-Google Drive כפי שחולץ מהקישור
 const FOLDER_ID = '1lsQxAHgIJcugQpo5eho-TDO6vVb2ukl5';
 
 app.get('/', (req, res) => {
-    res.send('Server is running');
+    res.send('המנוע פועל וממתין לפקודות...');
 });
 
-// שיניתי את הנתיב ל-/upload כדי שיתאים למה שהאתר שלך מחפש בלוגים
+// הנתיב המקור שהאתר שלך מבקש
 app.get('/upload', async (req, res) => {
     const videoUrl = req.query.url;
     
     if (!videoUrl) {
-        return res.status(400).send('Missing video URL');
+        return res.status(400).json({ error: 'Missing video URL' });
     }
 
-    // שליחת אישור מיידי לדפדפן כדי למנוע Timeout
-    res.json({ message: 'Process started', url: videoUrl });
+    // החזרת תשובה מיידית לאתר כדי שלא יציג שגיאה של זמן המתנה (Timeout)
+    res.json({ message: 'Process started successfully', url: videoUrl });
     
+    // הרצת תהליך ההורדה וההעלאה ברקע
     try {
         await processVideo(videoUrl);
     } catch (error) {
-        console.error("Error in process:", error);
+        console.error("❌ התהליך נכשל ברקע:", error);
     }
 });
 
 async function processVideo(videoUrl) {
-    console.log(`Starting processing for: ${videoUrl}`);
+    console.log(`🚀 מתחיל הזרמת וידאו עבור: ${videoUrl}`);
+
+    // יצירת צינור להעברת הנתונים בזמן אמת לענן
     const bridgeStream = new PassThrough();
 
+    // הפעלת yt-dlp במצב הזרמה (Output מופנה ל-'-')
     const ytdlp = spawn('yt-dlp', [
         '-f', 'bestvideo+bestaudio/best',
         '--merge-output-format', 'mp4',
@@ -52,33 +57,47 @@ async function processVideo(videoUrl) {
         videoUrl
     ]);
 
+    // חיבור יציאת הנתונים של המנוע אל צינור ההעלאה
     ytdlp.stdout.pipe(bridgeStream);
 
+    // הדפסת לוגי ההתקדמות (שם ראינו את ה-100% בהצלחה)
+    ytdlp.stderr.on('data', (data) => {
+        console.log(`דיווח: ${data.toString().trim()}`);
+    });
+
     try {
+        // התחברות ל-Google Drive באמצעות Service Account
         const auth = new google.auth.GoogleAuth({
             keyFile: './service-account.json', 
             scopes: ['https://www.googleapis.com/auth/drive.file'],
         });
         const drive = google.drive({ version: 'v3', auth });
 
-        await drive.files.create({
+        console.log("☁️ הצינור פתוח. מעביר נתונים ישירות ל-Google Drive...");
+
+        // יצירת הקובץ בדרייב מתוך זרם הנתונים
+        const response = await drive.files.create({
             requestBody: {
                 name: `video_${Date.now()}.mp4`,
                 parents: [FOLDER_ID], 
             },
             media: {
                 mimeType: 'video/mp4',
-                body: bridgeStream,
+                body: bridgeStream, // הזרמה ישירה ללא תפיסת מקום בשרת
             },
-            fields: 'id',
+            fields: 'id, name',
         });
 
-        console.log(`✅ Upload finished successfully.`);
+        console.log(`✅ הצלחה מלאה! הקובץ הועלה לדרייב. ID: ${response.data.id}`);
+
     } catch (error) {
-        console.error("❌ Drive API Error:", error.message);
+        console.error("❌ שגיאה חמורה מול ה-API של גוגל דרייב:", error.message);
+        if (error.response) {
+            console.error("פרטי השגיאה מגוגל:", JSON.stringify(error.response.data));
+        }
     }
 }
 
 app.listen(port, () => {
-    console.log(`Server listening on port ${port}`);
+    console.log(`🚀 השרת מאזין בהצלחה בפורט ${port}`);
 });
